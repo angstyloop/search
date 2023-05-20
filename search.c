@@ -25,6 +25,9 @@
  */
 static void append_if_match_cb( gpointer data, gpointer user_data )
 {
+	GRegex *regex;
+	GMatchInfo *match_info;
+	gchar *escaped_needle;
 	gchar *haystack = (gchar *) data;
 	GList **list_ptr = (GList **) user_data;
 
@@ -36,12 +39,27 @@ static void append_if_match_cb( gpointer data, gpointer user_data )
 	GList *first = g_list_first( *list_ptr );
 	gchar *needle = (gchar *) first->data;
 
-	/* Matches are appended to the end of the list.
+	/* GMatchInfo for strings containin the substring are appended to the
+	 * end of the list. 
 	 */
 	gssize haystack_len = -1; // search the whole string, like strstr
 
-	if ( g_strstr_len( haystack, haystack_len, needle ) )
-		*list_ptr = g_list_append( *list_ptr, haystack );
+	/* Escape regex special characters in the string needle, which is guaranteed
+	 * to be null terminated, which is why we can use -1 as the length.
+	 */
+	escaped_needle = g_regex_escape_string( needle, -1  );
+
+	/* Create a regex to search for the matching substring.
+	 */
+	regex = g_regex_new( escaped_needle, 0, 0, NULL );
+
+	/* If the string @haystack matches @regex, append the resulting
+	 * @match_info to the list.
+	 */
+	if ( g_regex_match_all( regex, haystack, 0, &match_info ) )
+		*list_ptr = g_list_append( *list_ptr, match_info );
+
+	g_regex_unref( regex );
 }
 
 /* Find a matching string ("needle") in a list of strings ("haystacks").
@@ -81,19 +99,82 @@ static GList *get_strings()
 	strings = g_list_append( strings, "ab" );
 	strings = g_list_append( strings, "abc" );
 	strings = g_list_append( strings, "abcd" );
+	strings = g_list_append( strings, "aa" );
+	strings = g_list_append( strings, "abab" );
+	strings = g_list_append( strings, "abcabc" );
+	strings = g_list_append( strings, "abcdabcd" );
 
 	return strings;
 }
 
-static void search_append_label( gpointer data, gpointer user_data )
+static gchar *get_markup_from_match_info( GMatchInfo *match_info )
 {
-	gchar *text;
-	GtkWidget *listbox;
+	const gchar *raw_str, *result, *match_str;
+	gchar *str;
+	gchar *a, *b;
+	GRegex *regex;
 
-	text = (gchar *) data;
+	a = "<b>";
+
+	b = "</b>";
+
+	g_assert( match_info );
+
+	regex = g_match_info_get_regex( match_info );
+
+	g_assert( regex );
+
+	match_str = g_regex_get_pattern( regex );
+
+	g_assert( match_str );
+
+	raw_str = g_match_info_get_string( match_info );
+
+	gchar *replacement = g_strdup_printf( "%s%s%s", a, match_str, b );
+
+	str = g_regex_replace( regex, raw_str, -1, 0, replacement, 0, NULL );
+
+	return str;
+}
+
+static void search_append_string( gpointer data, gpointer user_data )
+{
+	GtkWidget *label, *listbox;
+	gchar *str;
+
+	str = (gchar *) data;
+
+	label = gtk_label_new( str );
+
 	listbox = GTK_WIDGET( user_data );
 
-	gtk_box_append( GTK_BOX( listbox ), gtk_label_new( text ) );
+	gtk_box_append( GTK_BOX( listbox ), label );
+}
+
+static void search_append_match_info( gpointer data, gpointer user_data )
+{
+	const gchar *text;
+	const gchar *markup;
+	GMatchInfo *match_info;
+	GtkWidget *label, *listbox;
+
+	match_info = (GMatchInfo *) data;
+
+	g_assert( match_info );
+
+	text = g_match_info_get_string( match_info );
+
+	g_assert( text );
+
+	listbox = GTK_WIDGET( user_data );
+
+	label = gtk_label_new( NULL );
+
+	markup = get_markup_from_match_info( match_info );
+
+	gtk_label_set_markup( GTK_LABEL( label ), markup );
+
+	gtk_box_append( GTK_BOX( listbox ), label );
 }
 
 static void search_changed( GtkWidget *search, gpointer user_data )
@@ -118,13 +199,13 @@ static void search_changed( GtkWidget *search, gpointer user_data )
 
 	found = find_strings_with_substring( strings, (gchar *) text );
 
-	g_list_foreach( found, search_append_label, listbox );
+	g_list_foreach( found, search_append_match_info, listbox );
 }
 
 static void
 activate( GtkApplication *app, gpointer user_data )
 {
-	GtkWidget *window, *box, *search, *initial_listbox;
+	GtkWidget *window, *box, *search_entry, *initial_listbox;
 	GList *strings;
 
 	char* placeholder_text = "hello world";
@@ -135,18 +216,20 @@ activate( GtkApplication *app, gpointer user_data )
 
 	gtk_window_set_child( GTK_WINDOW( window ), box );
 
-	search = gtk_search_new();
+	search_entry = gtk_search_entry_new();
 
-	g_signal_connect( search, "search-changed",
+	g_signal_connect( search_entry, "search-changed",
 		G_CALLBACK( search_changed ), box );
 
-	gtk_box_append( GTK_BOX( box ), search );
+	gtk_box_append( GTK_BOX( box ), search_entry );
 
 	initial_listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
 
 	strings = get_strings();
 
-	g_list_foreach( strings, search_append_label, initial_listbox );
+	g_assert( g_list_length( strings ) == 8 );
+
+	g_list_foreach( strings, search_append_string, initial_listbox );
 
 	gtk_box_append( GTK_BOX( box ), initial_listbox );
 
