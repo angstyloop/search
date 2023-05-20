@@ -12,8 +12,8 @@
 
 #include <gtk/gtk.h>
 
-/* Used with foreach. Add a string to a list if the string contains a given
- * substring.
+/* This a the callback passed to foreach. Add a string to a list if the string
+ * contains a given substring.
  *
  * data - The string we want to search through (the "haystack").
  *
@@ -23,15 +23,14 @@
  * appended to the list each time this function is called by foreach.
  *
  */
-static void append_if_match_cb( gpointer data, gpointer user_data )
+static void
+append_if_match( gpointer data, gpointer user_data )
 {
 	GRegex *regex;
 	GMatchInfo *match_info;
 	gchar *escaped_needle;
 	gchar *haystack = (gchar *) data;
 	GList **list_ptr = (GList **) user_data;
-
-	g_assert( list_ptr );
 
 	/* The first string in the list is the string we want to search for,
 	 * i.e. the "needle".
@@ -67,7 +66,8 @@ static void append_if_match_cb( gpointer data, gpointer user_data )
  * haystacks - list of strings to search for needle
  * needle - string to find in haystacks
  */
-GList *find_strings_with_substring( GList *haystacks, gchar *needle )
+GList *
+find_strings_with_substring( GList *haystacks, gchar *needle )
 {
 	/* Create a list with the needle as the only element, like
 	 * append_if_match expects.
@@ -81,7 +81,7 @@ GList *find_strings_with_substring( GList *haystacks, gchar *needle )
 	/* Find any matching strings in the list of strings, and append them to
 	 * the list of found strings.
 	 */
-	g_list_foreach( haystacks, append_if_match_cb, &found );
+	g_list_foreach( haystacks, append_if_match, &found );
 
 	/* Remove the first element, which is the search query.
 	 */
@@ -90,8 +90,11 @@ GList *find_strings_with_substring( GList *haystacks, gchar *needle )
 	return found;
 }
 
-
-static GList *get_strings()
+/* This method shouldn't be reused in other code - it just generates a list of
+ * string we can use to test the reusable code. 
+ */
+static GList *
+get_strings()
 {
 	GList *strings = NULL;
 
@@ -107,37 +110,46 @@ static GList *get_strings()
 	return strings;
 }
 
-static gchar *get_markup_from_match_info( GMatchInfo *match_info )
+/* Get a string with the matching substrings marked up.
+ *
+ * match_info - The object containing the pointers to the matching substrings
+ * for a given searched string.
+ */
+static gchar *
+get_markup_from_match_info( GMatchInfo *match_info )
 {
 	const gchar *raw_str, *result, *match_str;
 	gchar *str;
-	gchar *a, *b;
+	gchar *left_token, *right_token;
 	GRegex *regex;
 
-	a = "<b>";
+	left_token = "<b>";
 
-	b = "</b>";
-
-	g_assert( match_info );
+	right_token = "</b>";
 
 	regex = g_match_info_get_regex( match_info );
 
-	g_assert( regex );
-
 	match_str = g_regex_get_pattern( regex );
-
-	g_assert( match_str );
 
 	raw_str = g_match_info_get_string( match_info );
 
-	gchar *replacement = g_strdup_printf( "%s%s%s", a, match_str, b );
+	gchar *replacement =
+		g_strdup_printf( "%s%s%s", left_token, match_str, right_token );
 
 	str = g_regex_replace( regex, raw_str, -1, 0, replacement, 0, NULL );
 
 	return str;
 }
 
-static void search_append_string( gpointer data, gpointer user_data )
+/* Append a label containing a string to a given GtkBox.
+ *
+ * data - The string.
+ *
+ * user_data - The GtkBox.
+ *
+ */
+static void
+search_append_string( gpointer data, gpointer user_data )
 {
 	GtkWidget *label, *listbox;
 	gchar *str;
@@ -151,7 +163,10 @@ static void search_append_string( gpointer data, gpointer user_data )
 	gtk_box_append( GTK_BOX( listbox ), label );
 }
 
-static void search_append_match_info( gpointer data, gpointer user_data )
+/* Append a label containing a string with marked up matching substrings.
+ */
+static void
+search_append_match_info( gpointer data, gpointer user_data )
 {
 	const gchar *text;
 	const gchar *markup;
@@ -160,11 +175,7 @@ static void search_append_match_info( gpointer data, gpointer user_data )
 
 	match_info = (GMatchInfo *) data;
 
-	g_assert( match_info );
-
 	text = g_match_info_get_string( match_info );
-
-	g_assert( text );
 
 	listbox = GTK_WIDGET( user_data );
 
@@ -177,7 +188,51 @@ static void search_append_match_info( gpointer data, gpointer user_data )
 	gtk_box_append( GTK_BOX( listbox ), label );
 }
 
-static void search_changed( GtkWidget *search, gpointer user_data )
+/* Create the initial "listbox", a GtkBox that contains the searchable strings.
+ */
+static GtkWidget *
+create_initial_listbox()
+{
+	GtkWidget *initial_listbox;
+	GList *strings;
+
+	initial_listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
+
+	strings = get_strings();
+
+	g_list_foreach( strings, search_append_string, initial_listbox );
+
+	return initial_listbox;
+}
+
+/* Create a new "filtered listbox" - a GtkBox that only contains strings from 
+ * get_strings that contain the substring @text.
+ *
+ * text - the substring to search for in the strings returned by get_strings
+ *
+ */
+static GtkWidget *
+create_filtered_listbox( gchar *text )
+{
+	GtkWidget *listbox;
+	GList *strings, *found;
+
+	listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
+
+	strings = get_strings();
+
+	found = find_strings_with_substring( strings, (gchar *) text );
+
+	g_list_foreach( found, search_append_match_info, listbox );
+
+	return listbox;
+}
+
+/* This is the callback function called whenever the GtkSearchEntry is modified
+ * by the user.
+ */
+static void
+search_changed( GtkWidget *search, gpointer user_data )
 {
 	GtkWidget *box, *listbox, *label;
 	GList *strings, *found;
@@ -189,26 +244,21 @@ static void search_changed( GtkWidget *search, gpointer user_data )
 
 	gtk_widget_unparent( listbox );
 
-	listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
-
-	gtk_box_append( GTK_BOX( box ), listbox );
-
-	strings = get_strings();
-
 	text = gtk_editable_get_text( GTK_EDITABLE( search ) );
 
-	found = find_strings_with_substring( strings, (gchar *) text );
+	listbox = create_filtered_listbox( (gchar *) text );
 
-	g_list_foreach( found, search_append_match_info, listbox );
+	gtk_box_append( GTK_BOX( box ), listbox );
 }
 
+/* Activate the GtkApplication. This is the callback function for the "activate"
+ * signal.
+ */
 static void
 activate( GtkApplication *app, gpointer user_data )
 {
 	GtkWidget *window, *box, *search_entry, *initial_listbox;
 	GList *strings;
-
-	char* placeholder_text = "hello world";
 
 	window = gtk_application_window_new( app );
 
@@ -223,19 +273,15 @@ activate( GtkApplication *app, gpointer user_data )
 
 	gtk_box_append( GTK_BOX( box ), search_entry );
 
-	initial_listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
-
-	strings = get_strings();
-
-	g_assert( g_list_length( strings ) == 8 );
-
-	g_list_foreach( strings, search_append_string, initial_listbox );
+	initial_listbox = create_initial_listbox();
 
 	gtk_box_append( GTK_BOX( box ), initial_listbox );
 
 	gtk_widget_show( window );
 }
 
+/* Set the "activate" signal handler and wait for the app to become ready.
+ */
 int
 main( int argc, char** argv )
 {
@@ -243,8 +289,11 @@ main( int argc, char** argv )
 	int status;
 	
 	app = gtk_application_new( "org.gtk.example", G_APPLICATION_FLAGS_NONE );
+
 	g_signal_connect( app, "activate", G_CALLBACK( activate ), NULL );
+
 	status = g_application_run( G_APPLICATION( app ), argc, argv );
+
 	g_object_unref( app );
 
 	return status;
