@@ -29,36 +29,54 @@ append_if_match( gpointer data, gpointer user_data )
 	GRegex *regex;
 	GMatchInfo *match_info;
 	gchar *escaped_needle;
-	gchar *haystack = (gchar *) data;
-	GList **list_ptr = (GList **) user_data;
+	GList *first, *second;
+	gchar *haystack, *needle;
+	GList **list_ptr;
+	gboolean use_regex;
 
-	/* The first string in the list is the string we want to search for,
+	list_ptr = (GList **) user_data;
+
+	haystack = (gchar *) data;
+
+	/* The first element in the list is the string we want to search for,
 	 * i.e. the "needle".
 	 */
-	GList *first = g_list_first( *list_ptr );
-	gchar *needle = (gchar *) first->data;
+	first = g_list_first( *list_ptr );
+	needle = (gchar *) first->data;
+
+	/* The second element is a boolean that determines whether or not we
+	 * interpret regex in the needle.
+	 */
+	second = first->next;
+	use_regex = GPOINTER_TO_INT( second->data );
 
 	/* GMatchInfo for strings containin the substring are appended to the
 	 * end of the list. 
 	 */
 	gssize haystack_len = -1; // search the whole string, like strstr
 
-	/* Escape regex special characters in the string needle, which is guaranteed
-	 * to be null terminated, which is why we can use -1 as the length.
+	/* Optionally escape regex special characters
 	 */
-	escaped_needle = g_regex_escape_string( needle, -1  );
+	escaped_needle = use_regex
+		? g_strdup( needle )
+		: g_regex_escape_string( needle, -1  );
 
 	/* Create a regex to search for the matching substring.
 	 */
 	regex = g_regex_new( escaped_needle, 0, 0, NULL );
 
-	/* If the string @haystack matches @regex, append the resulting
-	 * @match_info to the list.
+	/* If the regex compiled...
 	 */
-	if ( g_regex_match_all( regex, haystack, 0, &match_info ) )
-		*list_ptr = g_list_append( *list_ptr, match_info );
+	if ( regex ) {
+		/* If the string @haystack matches @regex, append the resulting
+		 * @match_info to the list.
+		 */
+		if ( g_regex_match( regex, haystack, 0, &match_info ) )
+			*list_ptr = g_list_append( *list_ptr, match_info );
 
-	g_regex_unref( regex );
+		g_regex_unref( regex );
+
+	}
 }
 
 /* Find a matching string ("needle") in a list of strings ("haystacks").
@@ -67,25 +85,32 @@ append_if_match( gpointer data, gpointer user_data )
  * needle - string to find in haystacks
  */
 GList *
-find_strings_with_substring( GList *haystacks, gchar *needle )
+find_strings_with_substring( GList *haystacks, gchar *needle, gboolean regex_enabled )
 {
 	/* Create a list with the needle as the only element, like
 	 * append_if_match expects.
 	 */
 	GList *found = NULL;
 
-	/* Append the needle to the empty list, like append_if_match_cb expects.
+	/* Append @needle and @regex_enabled to the list, like
+	 * append_if_match_cb expects.
 	 */
 	found = g_list_append( found, needle );
+	found = g_list_append( found, GINT_TO_POINTER( regex_enabled ) );
 
 	/* Find any matching strings in the list of strings, and append them to
 	 * the list of found strings.
 	 */
 	g_list_foreach( haystacks, append_if_match, &found );
 
-	/* Remove the first element, which is the search query.
+	/* Remove the first element, which is the search query, a gchar*.
 	 */
 	found = g_list_remove( found, (gconstpointer) needle );
+
+	/* Remove the second element, which is a gboolean that decides whether
+	 * or not we interpret regex in the search query.
+	 */
+	found = g_list_remove( found, GINT_TO_POINTER( regex_enabled ) );
 
 	return found;
 }
@@ -116,7 +141,7 @@ get_strings()
  * for a given searched string.
  */
 static gchar *
-get_markup_from_match_info( GMatchInfo *match_info )
+get_markup_from_match_info( GMatchInfo *match_info  )
 {
 	const gchar *raw_str, *result, *match_str;
 	gchar *str;
@@ -134,7 +159,7 @@ get_markup_from_match_info( GMatchInfo *match_info )
 	raw_str = g_match_info_get_string( match_info );
 
 	gchar *replacement =
-		g_strdup_printf( "%s%s%s", left_token, match_str, right_token );
+		g_strdup_printf( "%s\\0%s", left_token, right_token );
 
 	str = g_regex_replace( regex, raw_str, -1, 0, replacement, 0, NULL );
 
@@ -171,13 +196,16 @@ search_append_match_info( gpointer data, gpointer user_data )
 	const gchar *text;
 	const gchar *markup;
 	GMatchInfo *match_info;
-	GtkWidget *label, *listbox;
+	GtkWidget *box, *label, *listbox;
+	gboolean regex_enabled;
 
 	match_info = (GMatchInfo *) data;
 
 	text = g_match_info_get_string( match_info );
 
-	listbox = GTK_WIDGET( user_data );
+	box = GTK_WIDGET( user_data );
+
+	listbox = gtk_widget_get_last_child( box );
 
 	label = gtk_label_new( NULL );
 
@@ -212,18 +240,32 @@ create_initial_listbox()
  *
  */
 static GtkWidget *
-create_filtered_listbox( gchar *text )
+create_filtered_listbox( gchar *text, GtkWidget *box )
 {
-	GtkWidget *listbox;
+	GtkWidget *search_bar, *search_bar_box, *check_button, *listbox;
 	GList *strings, *found;
+	gboolean regex_enabled;
+
+	search_bar = gtk_widget_get_first_child( box );
+
+	search_bar_box = gtk_search_bar_get_child(
+		GTK_SEARCH_BAR( search_bar ) );
+
+	check_button = gtk_widget_get_last_child( search_bar_box );
+
+	regex_enabled = gtk_check_button_get_active(
+		GTK_CHECK_BUTTON( check_button ) );
 
 	listbox = gtk_box_new( GTK_ORIENTATION_VERTICAL, 0 );
 
+	gtk_box_append( GTK_BOX( box ), listbox );
+
 	strings = get_strings();
 
-	found = find_strings_with_substring( strings, (gchar *) text );
+	found = find_strings_with_substring( strings, (gchar *) text,
+		regex_enabled );
 
-	g_list_foreach( found, search_append_match_info, listbox );
+	g_list_foreach( found, search_append_match_info, box );
 
 	return listbox;
 }
@@ -234,21 +276,27 @@ create_filtered_listbox( gchar *text )
 static void
 search_changed( GtkWidget *search, gpointer user_data )
 {
-	GtkWidget *box, *listbox, *label;
+	GtkWidget *search_bar, *search_box, *search_entry, *box, *listbox,
+	 	*label;
 	GList *strings, *found;
 	const gchar *text;
 
 	box = GTK_WIDGET( user_data );
 
+	search_bar = gtk_widget_get_first_child( box );
+
+	search_box = gtk_search_bar_get_child(
+		GTK_SEARCH_BAR( search_bar ) );
+	
+	search_entry = gtk_widget_get_first_child( search_box );;
+
 	listbox = gtk_widget_get_last_child( box );
 
-	gtk_widget_unparent( listbox );
+	gtk_box_remove( GTK_BOX( box ), listbox );
 
-	text = gtk_editable_get_text( GTK_EDITABLE( search ) );
+	text = gtk_editable_get_text( GTK_EDITABLE( search_entry ) );
 
-	listbox = create_filtered_listbox( (gchar *) text );
-
-	gtk_box_append( GTK_BOX( box ), listbox );
+	listbox = create_filtered_listbox( (gchar *) text, box );
 }
 
 /* Activate the GtkApplication. This is the callback function for the "activate"
@@ -257,7 +305,9 @@ search_changed( GtkWidget *search, gpointer user_data )
 static void
 activate( GtkApplication *app, gpointer user_data )
 {
-	GtkWidget *window, *box, *search_entry, *initial_listbox;
+	GtkWidget *window, *box, *search_bar_box, *search_bar, *search_entry, *initial_listbox,
+		*check_button_label, *check_button;
+
 	GList *strings;
 
 	window = gtk_application_window_new( app );
@@ -266,12 +316,40 @@ activate( GtkApplication *app, gpointer user_data )
 
 	gtk_window_set_child( GTK_WINDOW( window ), box );
 
+	search_bar = gtk_search_bar_new();
+
+
+	gtk_search_bar_set_search_mode( GTK_SEARCH_BAR( search_bar), TRUE );
+	
+	search_bar_box = gtk_box_new( GTK_ORIENTATION_HORIZONTAL, 10 );
+
 	search_entry = gtk_search_entry_new();
+
+	gtk_box_append( GTK_BOX( search_bar_box ), search_entry );
+
+	gtk_search_bar_set_child( GTK_SEARCH_BAR( search_bar), search_bar_box );
+
+	gtk_search_bar_connect_entry( GTK_SEARCH_BAR( search_bar),
+		GTK_EDITABLE( search_entry ) );
 
 	g_signal_connect( search_entry, "search-changed",
 		G_CALLBACK( search_changed ), box );
 
-	gtk_box_append( GTK_BOX( box ), search_entry );
+	gtk_box_append( GTK_BOX( box ), search_bar );
+
+	check_button_label = gtk_label_new( NULL );
+
+	gtk_label_set_markup( GTK_LABEL( check_button_label ),
+		"<b>.*</b>" );
+
+	gtk_box_append( GTK_BOX( search_bar_box ), check_button_label );
+
+	check_button = gtk_check_button_new();
+
+	g_signal_connect( check_button, "toggled",
+		G_CALLBACK( search_changed ), box );
+
+	gtk_box_append( GTK_BOX( search_bar_box ), check_button );
 
 	initial_listbox = create_initial_listbox();
 
